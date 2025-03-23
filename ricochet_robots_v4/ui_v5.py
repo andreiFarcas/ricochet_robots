@@ -1,16 +1,18 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import random
 import time
-from solver_v4 import AStarSolver  # Import the solver class
 import threading
-from tkinter import ttk
+
+
+from manhattan_a_star import AStarSolver
+from reachability_a_star import ReachabilityAStarSolver
 
 class RicochetRobotsGame:
     def __init__(self, root):
         self.root = root
-        self.root.title("Ricochet Robots")
-        self.root.geometry("900x720")
+        self.root.title("Ricochet Robots v5")
+        self.root.geometry("1000x720")
         self.root.resizable(True, True)
         
         # Game constants
@@ -61,7 +63,7 @@ class RicochetRobotsGame:
         self.left_frame = tk.Frame(self.main_frame)
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        self.right_frame = tk.Frame(self.main_frame, width=180)
+        self.right_frame = tk.Frame(self.main_frame, width=220)
         self.right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
         self.right_frame.pack_propagate(False)
         
@@ -125,11 +127,21 @@ class RicochetRobotsGame:
         )
         self.reset_game_btn.pack(fill=tk.X, pady=5)
         
-        self.solve_btn = tk.Button(
-            self.control_frame, text="Solve", command=self.solve_game,
-            font=("Arial", 12), bg="#9C27B0", fg="white", height=2
+        # Solver buttons - new section with label
+        self.solver_frame = tk.LabelFrame(self.right_frame, text="Solvers", font=("Arial", 12))
+        self.solver_frame.pack(fill=tk.X, pady=10)
+        
+        self.manhattan_solve_btn = tk.Button(
+            self.solver_frame, text="A* (Manhattan)", command=lambda: self.solve_game("manhattan"),
+            font=("Arial", 11), bg="#9C27B0", fg="white", height=1
         )
-        self.solve_btn.pack(fill=tk.X, pady=5)
+        self.manhattan_solve_btn.pack(fill=tk.X, pady=5, padx=5)
+        
+        self.reachability_solve_btn = tk.Button(
+            self.solver_frame, text="A* (Reachability)", command=lambda: self.solve_game("reachability"),
+            font=("Arial", 11), bg="#673AB7", fg="white", height=1
+        )
+        self.reachability_solve_btn.pack(fill=tk.X, pady=5, padx=5)
         
         self.give_up_btn = tk.Button(
             self.control_frame, text="Give Up", command=self.give_up,
@@ -149,7 +161,7 @@ class RicochetRobotsGame:
             "2. Use arrow keys to move\n"
             "3. Get the matching robot\n   to the target\n"
             "4. Robots move until they\n   hit a wall or robot\n"
-            "5. Click 'Solve' to see\n   the solution"
+            "5. Click a solver button\n   to see a solution"
         )
         self.instructions_label = tk.Label(
             self.instructions_frame, text=instructions_text, 
@@ -165,6 +177,7 @@ class RicochetRobotsGame:
         self.new_game()
     
     def _create_board(self):
+        # ...existing code...
         board = [[{"walls": set()} for _ in range(self.GRID_SIZE)] for _ in range(self.GRID_SIZE)]
         # Outer walls
         for i in range(self.GRID_SIZE):
@@ -478,7 +491,13 @@ class RicochetRobotsGame:
         seconds = int(seconds) % 60
         return f"{minutes:02d}:{seconds:02d}"
 
-    def solve_game(self):
+    def solve_game(self, solver_type="manhattan"):
+        """
+        Solve the game using the specified solver.
+        
+        Args:
+            solver_type (str): The type of solver to use: 'manhattan' or 'reachability'
+        """
         if self.is_showing_solution:
             self.is_showing_solution = False
             messagebox.showinfo("Solution Cancelled", "Solution animation stopped.")
@@ -487,7 +506,7 @@ class RicochetRobotsGame:
         self.reset_positions()
         
         # Create and show the progress window
-        progress_window = SolverProgressWindow(self.root)
+        progress_window = SolverProgressWindow(self.root, solver_type)
         
         # Prepare data for solver
         target_color = self.current_target["color"]
@@ -498,18 +517,33 @@ class RicochetRobotsGame:
         solution_result = {"solution": None, "states_explored": 0}
         
         def solver_thread():
-            # Create solver with a new callback for progress updates
-            solver = AStarSolver(self.board, initial_positions, target_color, target_pos)
+            """
+            This function runs the selected solver in a separate thread to avoid blocking the UI.
+            It also updates the progress window with the number of states explored.
+            """
+            # Create solver based on the type with a new callback for progress updates
+            if solver_type == "manhattan":
+                solver = AStarSolver(self.board, initial_positions, target_color, target_pos)
+                
+                def progress_callback(states_explored):
+                    solution_result["states_explored"] = states_explored
+                    self.root.after(100, lambda: progress_window.update_states(states_explored))
+                    return not progress_window.cancelled
+                
+                # Run the solver with the callback
+                solution = solver.a_star_search(progress_callback)
+                
+            elif solver_type == "reachability":
+                solver = ReachabilityAStarSolver(self.board, initial_positions, target_color, target_pos)
+                
+                def progress_callback(states_explored):
+                    solution_result["states_explored"] = states_explored
+                    self.root.after(100, lambda: progress_window.update_states(states_explored))
+                    return not progress_window.cancelled
+                
+                # Run the solver with the callback
+                solution = solver.a_star_search(progress_callback)
             
-            def progress_callback(states_explored):
-                # Update the progress window with the number of states explored
-                solution_result["states_explored"] = states_explored
-                self.root.after(100, lambda: progress_window.update_states(states_explored))
-                # Check if the search was cancelled
-                return not progress_window.cancelled
-            
-            # Run the solver with the callback
-            solution = solver.a_star_search(progress_callback)
             solution_result["solution"] = solution
             
             # When done, update the UI thread
@@ -555,9 +589,9 @@ class RicochetRobotsGame:
         self.root.after(500, self._show_next_solution_step)
 
 class SolverProgressWindow:
-    def __init__(self, parent):
+    def __init__(self, parent, solver_type="manhattan"):
         self.window = tk.Toplevel(parent)
-        self.window.title("Solver Progress")
+        self.window.title(f"Solver Progress - {self._get_solver_name(solver_type)}")
         self.window.geometry("400x200")
         self.window.resizable(False, False)
         self.window.transient(parent)  # Make this window related to the parent
@@ -573,7 +607,7 @@ class SolverProgressWindow:
         self.window.geometry(f"+{x}+{y}")
         
         # Status message
-        self.status_var = tk.StringVar(value="Searching for a solution...")
+        self.status_var = tk.StringVar(value=f"Searching for a solution with {self._get_solver_name(solver_type)}...")
         self.status_label = tk.Label(self.window, textvariable=self.status_var, font=("Arial", 12))
         self.status_label.pack(pady=(20, 10))
         
@@ -607,6 +641,13 @@ class SolverProgressWindow:
         # Start the timer
         self.start_time = time.time()
         self.update_timer()
+    
+    def _get_solver_name(self, solver_type):
+        if solver_type == "manhattan":
+            return "Manhattan Heuristic"
+        elif solver_type == "reachability":
+            return "Reachability Heuristic"
+        return "Unknown Solver"
     
     def update_timer(self):
         if not self.cancelled:
